@@ -48,15 +48,15 @@ This is a causal language model: given a text prefix, it predicts the next token
 and can continue the text autoregressively. It was pretrained on FineWeb-Edu and
 is not instruction-tuned, RLHF-tuned, or chat-aligned.
 
-The checkpoint is a LitGPT/Fabric PyTorch checkpoint, not a
-`transformers.AutoModelForCausalLM` checkpoint. Use the GitHub repository code to
-load it.
+The checkpoint is a PyTorch `.pth` checkpoint, not a
+`transformers.AutoModelForCausalLM` checkpoint. Use the standalone runtime below
+to load it.
 
 Install and clone:
 
 ```bash
 git clone https://github.com/gyunggyung/Gated_Linear_Attention2
-cd Gated_Linear_Attention2/GatedLinearAttention2
+cd Gated_Linear_Attention2
 pip install -e .
 ```
 
@@ -72,7 +72,7 @@ repo_id = "gyung/Gated_Linear_Attention2"
 checkpoint_file = "checkpoints/checkpoint-01B/model-ckpt.pth"
 
 if not torch.cuda.is_available():
-    raise RuntimeError("This checkpoint is intended to run with CUDA/Triton kernels.")
+    raise RuntimeError("CUDA is recommended for this 1.3B checkpoint; CPU will be very slow.")
 
 device = "cuda"
 dtype = torch.bfloat16
@@ -101,8 +101,8 @@ next_token_id = int(torch.argmax(logits, dim=-1)[0])
 print(tokenizer.decode([next_token_id]))
 ```
 
-The standalone runtime uses the recurrent cache during generation, so decode
-memory does not grow with generated token length.
+The standalone runtime uses a recurrent state cache during generation, so decode
+memory does not grow with generated token length like a Transformer KV cache.
 """
 
 os.environ["TRITON_CACHE_MANAGER"] = "cache:ParallelFileCacheManager"
@@ -242,7 +242,6 @@ tags:
 - gated-deltanet
 - gdn2
 - kaczmarz
-- litgpt
 datasets:
 - HuggingFaceFW/fineweb-edu
 ---
@@ -278,15 +277,13 @@ or SWA layers.
 
 ## License
 
-The newly trained model weights in this Hugging Face repository are released
-under Apache-2.0 by the Gated_Linear_Attention2 authors.
+The model weights in this Hugging Face repository are released under Apache-2.0.
 
-The GitHub training/runtime code is derived from NVIDIA GatedDeltaNet-2 and is
-governed by the Nvidia Source Code License-NC in that repository. That code
-license is non-commercial research/evaluation only. The Apache-2.0 weights
-license does not grant commercial rights to the NVIDIA-derived runtime code.
-Commercial deployment should use an independently licensed compatible
-implementation or obtain the required upstream permission.
+The standalone inference runtime linked above is also Apache-2.0. It does not
+import `lit_gpt`, `fla`, or the NVIDIA GatedDeltaNet-2 Triton kernels. The
+training code used during experimentation may contain NVIDIA GatedDeltaNet-2
+derived components under `Nvidia Source Code License-NC`, but this Hugging Face
+model repository is intended to be used with the standalone Apache-2.0 runtime.
 
 ## Training Setup
 
@@ -305,7 +302,7 @@ implementation or obtain the required upstream permission.
 
 Each `checkpoints/checkpoint-XXB/` folder contains:
 
-- `model-ckpt.pth`: LitGPT/Fabric model-only checkpoint
+- `model-ckpt.pth`: PyTorch model-only checkpoint
 - `training_metadata.json`: run metadata and model config
 - `README.md`: this model card snapshot
 

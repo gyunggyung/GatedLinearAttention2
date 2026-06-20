@@ -9,29 +9,27 @@ from pathlib import Path
 from huggingface_hub import HfApi, create_repo, upload_file, upload_folder
 
 GITHUB_REPO_URL = "https://github.com/gyunggyung/Gated_Linear_Attention2"
-LICENSE_BODY = """The newly trained model weights in this Hugging Face repository are released
-under Apache-2.0 by the Gated_Linear_Attention2 authors.
+LICENSE_BODY = """The model weights in this Hugging Face repository are released under Apache-2.0.
 
-The GitHub training/runtime code is derived from NVIDIA GatedDeltaNet-2 and is
-governed by the Nvidia Source Code License-NC in that repository. That code
-license is non-commercial research/evaluation only. The Apache-2.0 weights
-license does not grant commercial rights to the NVIDIA-derived runtime code.
-Commercial deployment should use an independently licensed compatible
-implementation or obtain the required upstream permission."""
+The standalone inference runtime linked above is also Apache-2.0. It does not
+import `lit_gpt`, `fla`, or the NVIDIA GatedDeltaNet-2 Triton kernels. The
+training code used during experimentation may contain NVIDIA GatedDeltaNet-2
+derived components under `Nvidia Source Code License-NC`, but this Hugging Face
+model repository is intended to be used with the standalone Apache-2.0 runtime."""
 
 USAGE_BODY = """This is a causal language model: given a text prefix, it predicts the next token
 and can continue the text autoregressively. It was pretrained on FineWeb-Edu and
 is not instruction-tuned, RLHF-tuned, or chat-aligned.
 
-The checkpoint is a LitGPT/Fabric PyTorch checkpoint, not a
-`transformers.AutoModelForCausalLM` checkpoint. Use the GitHub repository code to
-load it.
+The checkpoint is a PyTorch `.pth` checkpoint, not a
+`transformers.AutoModelForCausalLM` checkpoint. Use the standalone runtime below
+to load it.
 
 Install and clone:
 
 ```bash
 git clone https://github.com/gyunggyung/Gated_Linear_Attention2
-cd Gated_Linear_Attention2/GatedLinearAttention2
+cd Gated_Linear_Attention2
 pip install -e .
 ```
 
@@ -47,7 +45,7 @@ repo_id = "gyung/Gated_Linear_Attention2"
 checkpoint_file = "checkpoints/checkpoint-01B/model-ckpt.pth"
 
 if not torch.cuda.is_available():
-    raise RuntimeError("This checkpoint is intended to run with CUDA/Triton kernels.")
+    raise RuntimeError("CUDA is recommended for this 1.3B checkpoint; CPU will be very slow.")
 
 device = "cuda"
 dtype = torch.bfloat16
@@ -76,8 +74,8 @@ next_token_id = int(torch.argmax(logits, dim=-1)[0])
 print(tokenizer.decode([next_token_id]))
 ```
 
-The standalone runtime uses the recurrent cache during generation, so decode
-memory does not grow with generated token length."""
+The standalone runtime uses a recurrent state cache during generation, so decode
+memory does not grow with generated token length like a Transformer KV cache."""
 
 
 def load_env_file(path: str) -> None:
@@ -99,7 +97,11 @@ def normalize_license_header(text: str) -> str:
         "license: other\nlicense_name: Nvidia Source Code License-NC\n",
         "license: apache-2.0\n",
     )
-    return text.replace("license: other\n", "license: apache-2.0\n")
+    text = text.replace("license: other\n", "license: apache-2.0\n")
+    text = text.replace("- litgpt\n", "")
+    text = text.replace("LitGPT/Fabric model-only checkpoint", "PyTorch model-only checkpoint")
+    text = text.replace("LitGPT/Fabric PyTorch checkpoint", "PyTorch `.pth` checkpoint")
+    return text
 
 
 def upsert_section(text: str, heading: str, body: str, before_heading: str | None = None) -> str:
@@ -112,11 +114,17 @@ def upsert_section(text: str, heading: str, body: str, before_heading: str | Non
     return text.rstrip() + "\n\n" + section.rstrip() + "\n"
 
 
+def remove_section(text: str, heading: str) -> str:
+    pattern = rf"\n?{re.escape(heading)}\n\n.*?(?=\n## |\Z)"
+    return re.sub(pattern, "\n", text, count=1, flags=re.S).replace("\n\n\n", "\n\n")
+
+
 def ensure_model_card_details(readme: Path) -> None:
     if not readme.exists():
         return
     text = readme.read_text(encoding="utf-8")
     text = normalize_license_header(text)
+    text = remove_section(text, "## Loading Sketch")
     text = upsert_section(text, "## Code", f"- GitHub: {GITHUB_REPO_URL}", "## Training Setup")
     text = upsert_section(text, "## License", LICENSE_BODY, "## Training Setup")
     text = upsert_section(text, "## How To Use", USAGE_BODY, "## Evaluation Plan")
