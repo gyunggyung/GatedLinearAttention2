@@ -30,6 +30,7 @@ HF_REPO_ID="${HF_REPO_ID:-}"
 HF_UPLOAD_INTERVAL_TOKENS="${HF_UPLOAD_INTERVAL_TOKENS:-1000000000}"
 HF_PRIVATE="${HF_PRIVATE:-true}"
 HF_UPLOAD_BLOCKING="${HF_UPLOAD_BLOCKING:-false}"
+RESUME_TRAINED_TOKENS="${RESUME_TRAINED_TOKENS:-0}"
 DEVICES="${DEVICES:-}"
 
 if [[ -n "${DEVICES}" ]]; then
@@ -78,6 +79,7 @@ python -u "${ROOT_DIR}/pretrain.py" \
   --data_shuffle_buffer "${DATA_SHUFFLE_BUFFER}" \
   --hf_repo_id "${HF_REPO_ID}" \
   --hf_upload_interval_tokens "${HF_UPLOAD_INTERVAL_TOKENS}" \
+  --resume_trained_tokens "${RESUME_TRAINED_TOKENS}" \
   --use_stream_tok \
   "${HF_BOOL_ARGS[@]}" \
   "${VAL_ARGS[@]}"

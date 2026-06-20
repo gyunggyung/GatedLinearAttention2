@@ -550,19 +550,30 @@ def main(args):
         "hparams": args.hparams,
         "iter_num": 0,
         "step_count": 0,
+        "trained_tokens_total": 0,
         "next_hf_upload_tokens": args.hf_upload_interval_tokens if args.hf_upload else 0,
     }
 
     if args.resume:
+        resume = os.path.join(args.out_dir, "latest-model-ckpt.pth")
         try:
-            resume = os.path.join(args.out_dir, "latest-model-ckpt.pth")
             if fabric.global_rank == 0:
                 fabric.print(f"Resuming training from {resume}")
-            fabric.load(resume, state)
+            load_state = state.copy()
+            load_state.pop("trained_tokens_total", None)
+            load_state.pop("next_hf_upload_tokens", None)
+            checkpoint_remainder = fabric.load(resume, load_state)
+            state.update(load_state)
+            if isinstance(checkpoint_remainder, dict):
+                for metadata_key in ("trained_tokens_total", "next_hf_upload_tokens"):
+                    if metadata_key in checkpoint_remainder:
+                        state[metadata_key] = checkpoint_remainder[metadata_key]
+            if args.resume_trained_tokens > 0:
+                state["trained_tokens_total"] = args.resume_trained_tokens
             fabric.print(f"Successfully resumed from {resume}")
-        except:
-            fabric.print(f"Failed to resume from {resume}")
-            args.resume = False
+        except Exception as exc:
+            fabric.print(f"Failed to resume from {resume}: {type(exc).__name__}: {exc}")
+            raise
     train_time = time.perf_counter()
     train(args, _TRAIN_START_TIME, fabric, state, train_dataloader, val_dataloader, monitor, args.resume)
     if fabric.global_rank == 0:
@@ -587,6 +598,8 @@ def train(args, _TRAIN_START_TIME, fabric, state, train_dataloader, val_dataload
     warmup_optimizer_steps = max(1, math.ceil(args.warmup_tokens / tokens_per_optimizer_step))
     warmup_iters = warmup_optimizer_steps * args.gradient_accumulation_steps
     initial_iter = state["iter_num"]
+    if "trained_tokens_total" not in state or state["trained_tokens_total"] <= 0:
+        state["trained_tokens_total"] = state["iter_num"] * tokens_per_global_micro_iter
     curr_iter = 0
     loss_func = FusedCrossEntropyLoss()    
     if args.hf_upload and state.get("next_hf_upload_tokens", 0) <= 0:
@@ -681,7 +694,7 @@ def train(args, _TRAIN_START_TIME, fabric, state, train_dataloader, val_dataload
                 if fabric.global_rank == 0:
                     fabric.print("resume finished, taken {} seconds".format(time.perf_counter() - total_t0))
 
-        if state["iter_num"] >= max_iters:
+        if state["trained_tokens_total"] >= args.max_tokens:
             break
     
         iter_t0 = time.perf_counter()
@@ -692,7 +705,8 @@ def train(args, _TRAIN_START_TIME, fabric, state, train_dataloader, val_dataload
             input_ids = train_data[:, 0 : model.config.block_size].contiguous()
             targets = train_data[:, 1 : model.config.block_size + 1].contiguous()
 
-        lr = get_lr(args, state["iter_num"], warmup_iters, max_iters)
+        lr_iter = min(max_iters, int(state["trained_tokens_total"] / tokens_per_optimizer_step) * args.gradient_accumulation_steps)
+        lr = get_lr(args, lr_iter, warmup_iters, max_iters)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
@@ -726,20 +740,24 @@ def train(args, _TRAIN_START_TIME, fabric, state, train_dataloader, val_dataload
             state["step_count"] += 1
 
         state["iter_num"] += 1
-        trained_tokens_exact = state["iter_num"] * tokens_per_global_micro_iter
+        state["trained_tokens_total"] += tokens_per_global_micro_iter
+        trained_tokens_exact = state["trained_tokens_total"]
         # input_id: B L 
         total_lengths += input_ids.size(1)
         t1 = time.perf_counter()
         if fabric.global_rank == 0 and state["iter_num"] % 10 == 0:
-            total_tokens = model.config.block_size * state["iter_num"] * args.micro_batch_size * fabric.world_size / 1e9
+            total_tokens = trained_tokens_exact / 1e9
             peak_memory = 0.0
             if fabric.device.type == "cuda":
                 peak_memory = torch.cuda.memory_stats(fabric.device)["allocated_bytes.all.peak"] / 1e9
+            elapsed = max(t1 - train_t0, 1e-9)
+            global_tokens_per_second = tokens * fabric.world_size / elapsed
+            remaining_hours = max(args.max_tokens - trained_tokens_exact, 0) / max(global_tokens_per_second, 1e-9) / 3600
             fabric.print(
                     f"iter {state['iter_num']} step {state['step_count']}: loss {loss.item():.4f}, iter time:"
                     f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
-                    f" remaining time: {(t1 - total_t0) / (state['iter_num'] - initial_iter) * (max_iters - state['iter_num']) / 3600:.2f} hours. " 
-                    f" or {(t1 - total_t0) / (state['iter_num'] - initial_iter) * (max_iters - state['iter_num']) / 3600 / 24:.2f} days. "
+                    f" remaining time: {remaining_hours:.2f} hours. "
+                    f" or {remaining_hours / 24:.2f} days. "
                     f" total training throughput {tokens / (t1 - train_t0) / 1e3:.2f}K tokens/s per GPU."
                     f" total trained tokens: {total_tokens} B tokens"
                     f" peak memory allocate {peak_memory:.2f} GB"
@@ -976,6 +994,7 @@ if __name__ == "__main__":
     group.add_argument('--hf_upload_interval_tokens', type=int, default=1_000_000_000, help='upload every N trained tokens')
     group.add_argument('--hf_private', action=argparse.BooleanOptionalAction, default=False, help='create/use a private HF repo')
     group.add_argument('--hf_upload_blocking', action=argparse.BooleanOptionalAction, default=False, help='block training while uploading milestones')
+    group.add_argument('--resume_trained_tokens', type=int, default=int(os.getenv("RESUME_TRAINED_TOKENS", "0")), help='override trained token counter after loading a resume checkpoint')
 
     args = parser.parse_args()
     name = f"{args.train_config}_{args.exp_name}".strip("_")
