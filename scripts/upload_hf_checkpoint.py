@@ -8,7 +8,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, create_repo, upload_file, upload_folder
 
-GITHUB_REPO_URL = "https://github.com/gyunggyung/GatedLinearAttention2"
+GITHUB_REPO_URL = "https://github.com/gyunggyung/Gated_Linear_Attention2"
 LICENSE_BODY = """The newly trained model weights in this Hugging Face repository are released
 under Apache-2.0 by the Gated_Linear_Attention2 authors.
 
@@ -30,8 +30,8 @@ load it.
 Install and clone:
 
 ```bash
-git clone https://github.com/gyunggyung/GatedLinearAttention2
-cd GatedLinearAttention2/GatedLinearAttention2
+git clone https://github.com/gyunggyung/Gated_Linear_Attention2
+cd Gated_Linear_Attention2/GatedLinearAttention2
 pip install -e .
 ```
 

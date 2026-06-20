@@ -41,7 +41,7 @@ from lit_gpt import FusedCrossEntropyLoss
 from data import get_stateful_stream_tok_dataset
 
 _TRAIN_START_TIME = time.time()
-GITHUB_REPO_URL = "https://github.com/gyunggyung/GatedLinearAttention2"
+GITHUB_REPO_URL = "https://github.com/gyunggyung/Gated_Linear_Attention2"
 MODEL_CARD_USAGE_MD = """## How To Use
 
 This is a causal language model: given a text prefix, it predicts the next token
@@ -55,8 +55,8 @@ load it.
 Install and clone:
 
 ```bash
-git clone https://github.com/gyunggyung/GatedLinearAttention2
-cd GatedLinearAttention2/GatedLinearAttention2
+git clone https://github.com/gyunggyung/Gated_Linear_Attention2
+cd Gated_Linear_Attention2/GatedLinearAttention2
 pip install -e .
 ```
 
