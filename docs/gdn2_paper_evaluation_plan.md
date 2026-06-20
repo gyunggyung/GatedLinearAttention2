@@ -69,9 +69,11 @@ The runner evaluates every available milestone checkpoint under:
 runs/outputs/tsz128x4k_10B_gdn2_kla_1.3B_fineweb_edu_10bt/hf_checkpoints/checkpoint-??B/model-ckpt.pth
 ```
 
-Expected checkpoints are `01B` through `10B`. This lets us measure whether
-performance improves monotonically with trained tokens or whether some tasks
-plateau/regress.
+Expected checkpoints are `01B` through `10B`. The `10B` checkpoint is evaluated
+first because it is the main model to compare with the GDN-2 paper baselines.
+After the full `10B` Table 2/3/4 pass finishes, the runner evaluates `01B`,
+`02B`, ..., `09B` to measure whether performance improves monotonically with
+trained tokens or whether some tasks plateau/regress.
 
 ## Parallel Execution
 
@@ -81,15 +83,19 @@ The scheduler is:
 python scripts/run_gdn2_paper_eval.py --gpus 0,1,2,3,4,5,6,7 --require_10b
 ```
 
-It builds one queue containing:
+It builds phased queues:
 
-- one Table 2 job per checkpoint;
-- one Table 3 RULER job per checkpoint;
-- one Table 4 real-world retrieval job per checkpoint.
+1. `10B_first`: one Table 2 job, one Table 3 RULER job, and one Table 4
+   real-world retrieval job for `checkpoint-10B`.
+2. `learning_curve`: the same three jobs for the earlier checkpoints.
 
-Each running job gets one GPU through `CUDA_VISIBLE_DEVICES=<gpu>`. When a GPU
-finishes its current job, the scheduler immediately launches the next pending
-job on that GPU.
+Each running job gets one GPU through `CUDA_VISIBLE_DEVICES=<gpu>`. During the
+`10B_first` phase, only the three `10B` jobs are launched, so the remaining GPUs
+can sit idle briefly. This is intentional: the first useful answer is whether
+the final 10B-token model is competitive with GDN-2 and the paper's other
+baselines. When all `10B` jobs finish, the markdown summary is regenerated.
+Only then does the runner start the `01B` through `09B` learning-curve jobs. In
+the learning-curve phase, any free GPU immediately takes the next pending job.
 
 ## Automatic Start After Training
 
@@ -99,8 +105,10 @@ The watcher is:
 setsid bash scripts/watch_and_run_gdn2_eval.sh >> runs/eval/gdn2_paper/watch_eval.log 2>&1 < /dev/null &
 ```
 
-It waits for the current training PID, then launches the full evaluation only
-after `checkpoint-10B` exists.
+It waits for the current training PID, then launches the evaluation only after
+`checkpoint-10B` exists. The watcher passes `--primary_checkpoint 10B` and
+`--summarize_after_phase`, so `GDN2_PAPER_EVAL_RESULTS.md` is written once after
+the 10B-only phase and then refreshed again after the full learning-curve phase.
 
 ## Outputs
 
@@ -129,4 +137,3 @@ and checkpoint.
   `scripts/run_gdn2_paper_eval.py`.
 - Training-completion watcher exists:
   `scripts/watch_and_run_gdn2_eval.sh`.
-

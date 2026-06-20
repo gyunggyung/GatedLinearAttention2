@@ -38,6 +38,9 @@ python "${ROOT_DIR}/scripts/run_gdn2_paper_eval.py" \
   --results_dir "${RESULTS_DIR}" \
   --gpus "${GPUS}" \
   --require_10b \
+  --primary_checkpoint 10B \
+  --summarize_after_phase \
+  --summary_output "${RESULTS_DIR}/GDN2_PAPER_EVAL_RESULTS.md" \
   2>&1 | tee -a "${EVAL_LOG}"
 
 python "${ROOT_DIR}/scripts/summarize_gdn2_paper_eval.py" \

@@ -47,6 +47,23 @@ def discover_checkpoints(out_dir: Path, include_latest: bool = False, include_fi
     return found
 
 
+def checkpoint_eval_order(name: str, primary_checkpoint: str) -> tuple[int, int, str]:
+    if name == primary_checkpoint:
+        return (0, 0, name)
+    match = re.fullmatch(r"(\d+)B", name)
+    if match:
+        return (1, int(match.group(1)), name)
+    if name == "final":
+        return (2, 0, name)
+    if name == "latest":
+        return (3, 0, name)
+    return (4, 0, name)
+
+
+def order_checkpoints_for_eval(checkpoints: list[tuple[str, Path]], primary_checkpoint: str) -> list[tuple[str, Path]]:
+    return sorted(checkpoints, key=lambda item: checkpoint_eval_order(item[0], primary_checkpoint))
+
+
 def build_jobs(args: argparse.Namespace, checkpoints: list[tuple[str, Path]]) -> list[Job]:
     results_dir = Path(args.results_dir)
     jobs: list[Job] = []
@@ -136,7 +153,7 @@ def build_jobs(args: argparse.Namespace, checkpoints: list[tuple[str, Path]]) ->
     return jobs
 
 
-def run_jobs(args: argparse.Namespace, jobs: list[Job]) -> int:
+def run_jobs(args: argparse.Namespace, jobs: list[Job], phase_name: str = "all") -> int:
     logs_dir = Path(args.results_dir) / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     pending = [job for job in jobs if args.overwrite or not job.output_path.exists()]
@@ -145,6 +162,7 @@ def run_jobs(args: argparse.Namespace, jobs: list[Job]) -> int:
     failed = 0
 
     gpu_ids = [item.strip() for item in args.gpus.split(",") if item.strip()]
+    print(f"[phase-start] {phase_name} jobs={len(pending)}", flush=True)
     while pending or running:
         for gpu in gpu_ids:
             gpu_int = int(gpu)
@@ -158,7 +176,7 @@ def run_jobs(args: argparse.Namespace, jobs: list[Job]) -> int:
             env["CUDA_VISIBLE_DEVICES"] = gpu
             env.setdefault("NUMEXPR_MAX_THREADS", "256")
             env.setdefault("TOKENIZERS_PARALLELISM", "false")
-            print(f"[launch] gpu={gpu} job={job.name}", flush=True)
+            print(f"[launch] phase={phase_name} gpu={gpu} job={job.name}", flush=True)
             proc = subprocess.Popen(
                 job.command,
                 cwd=str(REPO_ROOT),
@@ -177,7 +195,7 @@ def run_jobs(args: argparse.Namespace, jobs: list[Job]) -> int:
             log_f.close()
             status = {"job": job.name, "checkpoint": job.checkpoint_name, "returncode": ret, "output": str(job.output_path)}
             completed.append(status)
-            print(f"[done] gpu={gpu_int} rc={ret} job={job.name}", flush=True)
+            print(f"[done] phase={phase_name} gpu={gpu_int} rc={ret} job={job.name}", flush=True)
             if ret != 0:
                 failed += 1
             del running[gpu_int]
@@ -185,9 +203,44 @@ def run_jobs(args: argparse.Namespace, jobs: list[Job]) -> int:
         manifest = Path(args.results_dir) / "job_manifest.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
         with manifest.open("w", encoding="utf-8") as f:
-            json.dump({"pending": [job.name for job in pending], "running": [job.name for _, job, _ in running.values()], "completed": completed}, f, indent=2)
+            json.dump(
+                {
+                    "phase": phase_name,
+                    "pending": [job.name for job in pending],
+                    "running": [job.name for _, job, _ in running.values()],
+                    "completed": completed,
+                },
+                f,
+                indent=2,
+            )
 
+    print(f"[phase-done] {phase_name} failed={failed}", flush=True)
     return 1 if failed else 0
+
+
+def split_primary_jobs(jobs: list[Job], primary_checkpoint: str) -> list[tuple[str, list[Job]]]:
+    primary = [job for job in jobs if job.checkpoint_name == primary_checkpoint]
+    remaining = [job for job in jobs if job.checkpoint_name != primary_checkpoint]
+    phases: list[tuple[str, list[Job]]] = []
+    if primary:
+        phases.append((f"{primary_checkpoint}_first", primary))
+    if remaining:
+        phases.append(("learning_curve", remaining))
+    return phases
+
+
+def write_phase_summary(args: argparse.Namespace, phase_name: str) -> int:
+    output = Path(args.summary_output) if args.summary_output else Path(args.results_dir) / "GDN2_PAPER_EVAL_RESULTS.md"
+    command = [
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "summarize_gdn2_paper_eval.py"),
+        "--results_dir",
+        str(args.results_dir),
+        "--output",
+        str(output),
+    ]
+    print(f"[summary] phase={phase_name} output={output}", flush=True)
+    return subprocess.run(command, cwd=str(REPO_ROOT)).returncode
 
 
 def parse_args() -> argparse.Namespace:
@@ -205,6 +258,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include_latest", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--require_10b", action="store_true", help="Fail unless checkpoint-10B exists")
+    parser.add_argument("--primary_checkpoint", default="10B", help="Checkpoint to evaluate fully before the learning-curve checkpoints.")
+    parser.add_argument("--summarize_after_phase", action="store_true", help="Regenerate the markdown report after each evaluation phase.")
+    parser.add_argument("--summary_output", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -215,6 +271,7 @@ def main() -> None:
         raise SystemExit(f"checkpoint-10B not found under {args.out_dir / 'hf_checkpoints'}")
     if not checkpoints:
         raise SystemExit(f"No checkpoints found under {args.out_dir}")
+    checkpoints = order_checkpoints_for_eval(checkpoints, args.primary_checkpoint)
     jobs = build_jobs(args, checkpoints)
     Path(args.results_dir).mkdir(parents=True, exist_ok=True)
     with (Path(args.results_dir) / "planned_jobs.json").open("w", encoding="utf-8") as f:
@@ -224,7 +281,12 @@ def main() -> None:
             indent=2,
             ensure_ascii=False,
         )
-    raise SystemExit(run_jobs(args, jobs))
+    failed = 0
+    for phase_name, phase_jobs in split_primary_jobs(jobs, args.primary_checkpoint):
+        failed += run_jobs(args, phase_jobs, phase_name=phase_name)
+        if args.summarize_after_phase:
+            failed += 1 if write_phase_summary(args, phase_name) else 0
+    raise SystemExit(1 if failed else 0)
 
 
 if __name__ == "__main__":
