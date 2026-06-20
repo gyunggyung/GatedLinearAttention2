@@ -148,13 +148,13 @@ Upload defaults:
 HF_UPLOAD=1
 HF_REPO_ID=Gated_Linear_Attention2
 HF_UPLOAD_INTERVAL_TOKENS=1000000000
-HF_PRIVATE=true
+HF_PRIVATE=false
 HF_UPLOAD_BLOCKING=false
 ```
 
 That means:
 
-- create/use a private HF repo;
+- create/use a public HF repo by default;
 - upload to `<HF token owner>/Gated_Linear_Attention2` by default;
 - if `HF_REPO_ID` includes a namespace, use that exact repo id;
 - save a model-only checkpoint at every 1B tokens;
@@ -217,7 +217,7 @@ ACTIVATION_CHECKPOINTING=on \
 HF_UPLOAD=1 \
 HF_REPO_ID=Gated_Linear_Attention2 \
 HF_UPLOAD_INTERVAL_TOKENS=1000000000 \
-HF_PRIVATE=true \
+HF_PRIVATE=false \
 ./scripts/pretrain_gdn2_kla_10bt.sh
 ```
 

@@ -14,6 +14,8 @@ gdn2_kla_1.3B
 
 실제 8-GPU 10B 학습 runbook은 [docs/run_gdn2_kla_10b_fair_hf_upload.md](docs/run_gdn2_kla_10b_fair_hf_upload.md)에 정리했습니다.
 
+Apache-2.0 독립 추론 런타임은 [GatedLinearAttention2](GatedLinearAttention2)에 분리했습니다. 이 폴더는 `lit_gpt`, `fla`, NVIDIA GDN-2 Triton kernel을 import하지 않고, Hugging Face의 `gyung/Gated_Linear_Attention2` weights와 repo 내부 `tokenizer/`를 바로 로드합니다.
+
 ## 한 줄 요약
 
 `gdn2_kla_1.3B`는 GDN-2의 channel-wise erase/write gate에 Kaczmarz식 key-norm-normalized update step을 접어 넣은 recurrent-only linear attention 모델입니다. 기본 학습 길이는 GDN-2 논문 recipe와 맞춘 4K tokens입니다.

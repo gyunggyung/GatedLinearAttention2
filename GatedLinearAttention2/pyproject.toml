@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gated-linear-attention2"
+version = "0.1.0"
+description = "Independent Apache-2.0 PyTorch runtime for Gated_Linear_Attention2 weights"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "torch",
+  "huggingface_hub",
+  "transformers",
+]
+
+[tool.setuptools.packages.find]
+include = ["gated_linear_attention2*"]

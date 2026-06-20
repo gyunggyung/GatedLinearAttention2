@@ -41,6 +41,69 @@ from lit_gpt import FusedCrossEntropyLoss
 from data import get_stateful_stream_tok_dataset
 
 _TRAIN_START_TIME = time.time()
+GITHUB_REPO_URL = "https://github.com/gyunggyung/GatedLinearAttention2"
+MODEL_CARD_USAGE_MD = """## How To Use
+
+This is a causal language model: given a text prefix, it predicts the next token
+and can continue the text autoregressively. It was pretrained on FineWeb-Edu and
+is not instruction-tuned, RLHF-tuned, or chat-aligned.
+
+The checkpoint is a LitGPT/Fabric PyTorch checkpoint, not a
+`transformers.AutoModelForCausalLM` checkpoint. Use the GitHub repository code to
+load it.
+
+Install and clone:
+
+```bash
+git clone https://github.com/gyunggyung/GatedLinearAttention2
+cd GatedLinearAttention2/GatedLinearAttention2
+pip install -e .
+```
+
+Minimal text-generation example:
+
+```python
+import torch
+
+from gated_linear_attention2 import GatedLinearAttention2ForCausalLM, load_tokenizer
+from gated_linear_attention2.generation import generate
+
+repo_id = "gyung/Gated_Linear_Attention2"
+checkpoint_file = "checkpoints/checkpoint-01B/model-ckpt.pth"
+
+if not torch.cuda.is_available():
+    raise RuntimeError("This checkpoint is intended to run with CUDA/Triton kernels.")
+
+device = "cuda"
+dtype = torch.bfloat16
+
+model = GatedLinearAttention2ForCausalLM.from_hf(
+    repo_id=repo_id,
+    checkpoint=checkpoint_file,
+    device=device,
+    dtype=dtype,
+)
+tokenizer = load_tokenizer(repo_id, subfolder="tokenizer")
+
+prompt = "Artificial intelligence can help education by"
+print(generate(model, tokenizer, prompt, max_new_tokens=80, temperature=0.8, top_k=50))
+```
+
+For next-token scoring instead of generation, run one forward pass and inspect
+the final-position logits:
+
+```python
+prompt = "The capital of France is"
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+with torch.no_grad():
+    logits = model(input_ids)[:, -1, :]
+next_token_id = int(torch.argmax(logits, dim=-1)[0])
+print(tokenizer.decode([next_token_id]))
+```
+
+The standalone runtime uses the recurrent cache during generation, so decode
+memory does not grow with generated token length.
+"""
 
 os.environ["TRITON_CACHE_MANAGER"] = "cache:ParallelFileCacheManager"
 
@@ -171,7 +234,7 @@ def write_hf_milestone_metadata(args, model, folder: Path, milestone_index: int,
     }
     (folder / "training_metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
     readme = f"""---
-license: other
+license: apache-2.0
 library_name: pytorch
 tags:
 - linear-attention
@@ -209,6 +272,22 @@ k_t(\\lambda_t w_t \\odot v_t)^\\top
 It is not a standard Transformers checkpoint and does not use softmax attention
 or SWA layers.
 
+## Code
+
+- GitHub: {GITHUB_REPO_URL}
+
+## License
+
+The newly trained model weights in this Hugging Face repository are released
+under Apache-2.0 by the Gated_Linear_Attention2 authors.
+
+The GitHub training/runtime code is derived from NVIDIA GatedDeltaNet-2 and is
+governed by the Nvidia Source Code License-NC in that repository. That code
+license is non-commercial research/evaluation only. The Apache-2.0 weights
+license does not grant commercial rights to the NVIDIA-derived runtime code.
+Commercial deployment should use an independently licensed compatible
+implementation or obtain the required upstream permission.
+
 ## Training Setup
 
 - Base architecture: recurrent-only GDN-2, 1.3B scale
@@ -232,24 +311,7 @@ Each `checkpoints/checkpoint-XXB/` folder contains:
 
 This is not loadable with `transformers.AutoModelForCausalLM.from_pretrained`.
 
-## Loading Sketch
-
-Use the code from the training repository:
-
-```python
-import torch
-from lit_gpt.config import Config
-from lit_gpt.model import GPT
-
-config = Config.from_name("gdn2_kla_1.3B", block_size=4096)
-model = GPT(config)
-checkpoint = torch.load("model-ckpt.pth", map_location="cpu")
-model.load_state_dict(checkpoint["model"], strict=False)
-model.eval()
-```
-
-Depending on the Fabric/FSDP save format, production loading may require the
-same Lightning Fabric stack used for training.
+{MODEL_CARD_USAGE_MD}
 
 ## Evaluation Plan
 
@@ -915,7 +977,7 @@ if __name__ == "__main__":
     group.add_argument('--hf_upload', action=argparse.BooleanOptionalAction, default=False, help='upload model-only milestones to Hugging Face Hub')
     group.add_argument('--hf_repo_id', default=os.getenv("HF_REPO_ID", ""), type=str, help='HF repo id; if empty, infer from token owner and exp_name')
     group.add_argument('--hf_upload_interval_tokens', type=int, default=1_000_000_000, help='upload every N trained tokens')
-    group.add_argument('--hf_private', action=argparse.BooleanOptionalAction, default=True, help='create/use a private HF repo')
+    group.add_argument('--hf_private', action=argparse.BooleanOptionalAction, default=False, help='create/use a private HF repo')
     group.add_argument('--hf_upload_blocking', action=argparse.BooleanOptionalAction, default=False, help='block training while uploading milestones')
 
     args = parser.parse_args()

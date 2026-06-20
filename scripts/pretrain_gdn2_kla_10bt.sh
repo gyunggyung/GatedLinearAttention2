@@ -19,7 +19,7 @@ export DATA_SHUFFLE_BUFFER="${DATA_SHUFFLE_BUFFER:-100000}"
 export HF_UPLOAD="${HF_UPLOAD:-1}"
 export HF_REPO_ID="${HF_REPO_ID:-Gated_Linear_Attention2}"
 export HF_UPLOAD_INTERVAL_TOKENS="${HF_UPLOAD_INTERVAL_TOKENS:-1000000000}"
-export HF_PRIVATE="${HF_PRIVATE:-true}"
+export HF_PRIVATE="${HF_PRIVATE:-false}"
 export HF_UPLOAD_BLOCKING="${HF_UPLOAD_BLOCKING:-false}"
 
 exec "${SCRIPT_DIR}/pretrain_fineweb_edu_100bt_gdn2.sh"

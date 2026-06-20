@@ -3,9 +3,81 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 
 from huggingface_hub import HfApi, create_repo, upload_file, upload_folder
+
+GITHUB_REPO_URL = "https://github.com/gyunggyung/GatedLinearAttention2"
+LICENSE_BODY = """The newly trained model weights in this Hugging Face repository are released
+under Apache-2.0 by the Gated_Linear_Attention2 authors.
+
+The GitHub training/runtime code is derived from NVIDIA GatedDeltaNet-2 and is
+governed by the Nvidia Source Code License-NC in that repository. That code
+license is non-commercial research/evaluation only. The Apache-2.0 weights
+license does not grant commercial rights to the NVIDIA-derived runtime code.
+Commercial deployment should use an independently licensed compatible
+implementation or obtain the required upstream permission."""
+
+USAGE_BODY = """This is a causal language model: given a text prefix, it predicts the next token
+and can continue the text autoregressively. It was pretrained on FineWeb-Edu and
+is not instruction-tuned, RLHF-tuned, or chat-aligned.
+
+The checkpoint is a LitGPT/Fabric PyTorch checkpoint, not a
+`transformers.AutoModelForCausalLM` checkpoint. Use the GitHub repository code to
+load it.
+
+Install and clone:
+
+```bash
+git clone https://github.com/gyunggyung/GatedLinearAttention2
+cd GatedLinearAttention2/GatedLinearAttention2
+pip install -e .
+```
+
+Minimal text-generation example:
+
+```python
+import torch
+
+from gated_linear_attention2 import GatedLinearAttention2ForCausalLM, load_tokenizer
+from gated_linear_attention2.generation import generate
+
+repo_id = "gyung/Gated_Linear_Attention2"
+checkpoint_file = "checkpoints/checkpoint-01B/model-ckpt.pth"
+
+if not torch.cuda.is_available():
+    raise RuntimeError("This checkpoint is intended to run with CUDA/Triton kernels.")
+
+device = "cuda"
+dtype = torch.bfloat16
+
+model = GatedLinearAttention2ForCausalLM.from_hf(
+    repo_id=repo_id,
+    checkpoint=checkpoint_file,
+    device=device,
+    dtype=dtype,
+)
+tokenizer = load_tokenizer(repo_id, subfolder="tokenizer")
+
+prompt = "Artificial intelligence can help education by"
+print(generate(model, tokenizer, prompt, max_new_tokens=80, temperature=0.8, top_k=50))
+```
+
+For next-token scoring instead of generation, run one forward pass and inspect
+the final-position logits:
+
+```python
+prompt = "The capital of France is"
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+with torch.no_grad():
+    logits = model(input_ids)[:, -1, :]
+next_token_id = int(torch.argmax(logits, dim=-1)[0])
+print(tokenizer.decode([next_token_id]))
+```
+
+The standalone runtime uses the recurrent cache during generation, so decode
+memory does not grow with generated token length."""
 
 
 def load_env_file(path: str) -> None:
@@ -20,6 +92,35 @@ def load_env_file(path: str) -> None:
             line = line[len("export "):].strip()
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def normalize_license_header(text: str) -> str:
+    text = text.replace(
+        "license: other\nlicense_name: Nvidia Source Code License-NC\n",
+        "license: apache-2.0\n",
+    )
+    return text.replace("license: other\n", "license: apache-2.0\n")
+
+
+def upsert_section(text: str, heading: str, body: str, before_heading: str | None = None) -> str:
+    section = f"{heading}\n\n{body.strip()}\n\n"
+    pattern = rf"{re.escape(heading)}\n\n.*?(?=\n## |\Z)"
+    if re.search(pattern, text, flags=re.S):
+        return re.sub(pattern, section.rstrip() + "\n", text, count=1, flags=re.S)
+    if before_heading and before_heading in text:
+        return text.replace(before_heading, section + before_heading, 1)
+    return text.rstrip() + "\n\n" + section.rstrip() + "\n"
+
+
+def ensure_model_card_details(readme: Path) -> None:
+    if not readme.exists():
+        return
+    text = readme.read_text(encoding="utf-8")
+    text = normalize_license_header(text)
+    text = upsert_section(text, "## Code", f"- GitHub: {GITHUB_REPO_URL}", "## Training Setup")
+    text = upsert_section(text, "## License", LICENSE_BODY, "## Training Setup")
+    text = upsert_section(text, "## How To Use", USAGE_BODY, "## Evaluation Plan")
+    readme.write_text(text, encoding="utf-8")
 
 
 def main() -> None:
@@ -40,9 +141,14 @@ def main() -> None:
     if not folder.exists():
         raise FileNotFoundError(folder)
 
-    create_repo(args.repo_id, token=token, private=args.private, exist_ok=True)
+    api = HfApi(token=token)
+    try:
+        api.repo_info(repo_id=args.repo_id, repo_type="model", token=token)
+    except Exception:
+        create_repo(args.repo_id, token=token, private=args.private, exist_ok=True)
 
     readme = folder / "README.md"
+    ensure_model_card_details(readme)
     if readme.exists():
         upload_file(
             repo_id=args.repo_id,
@@ -60,7 +166,6 @@ def main() -> None:
         commit_message=f"Upload {args.path_in_repo}",
     )
 
-    api = HfApi(token=token)
     api.create_tag(
         repo_id=args.repo_id,
         tag=args.path_in_repo.replace("/", "-"),
