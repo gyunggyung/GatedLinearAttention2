@@ -357,8 +357,9 @@ class GatedDeltaNet2(nn.Module):
 
         if eta is not None and k_norm_sq is not None:
             step = eta / k_norm_sq
-            b = (b * step).clamp(min=0.0, max=1.0)
-            w = (w * step).clamp(min=0.0, max=1.0)
+            b_dtype, w_dtype = b.dtype, w.dtype
+            b = (b.float() * step).clamp(min=0.0, max=1.0).to(b_dtype)
+            w = (w.float() * step).clamp(min=0.0, max=1.0).to(w_dtype)
 
         # Optionally lift the erase gate from [0, 1] into [0, 2], which allows
         # negative eigenvalues in the state transition (extra state-tracking

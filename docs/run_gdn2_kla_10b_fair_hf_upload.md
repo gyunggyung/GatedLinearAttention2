@@ -96,6 +96,7 @@ The 4K fair-comparison setting uses:
 ```text
 TRAIN_CONFIG=tsz128x4k_10B
 MICRO_BATCH_SIZE=16
+ACTIVATION_CHECKPOINTING=on
 DEVICES=8
 TRAIN_NUM_WORKERS=0
 GLOBAL_BATCH_TOKENS=524288
@@ -110,6 +111,22 @@ Why `MICRO_BATCH_SIZE=16`:
 So the run uses all 8 H200 GPUs with the largest micro batch that preserves the
 published GDN-2 global batch size. Larger micro batches would change the global
 batch and make the comparison less clean.
+
+In the actual H200 environment, `MICRO_BATCH_SIZE=16` without activation
+checkpointing OOMs at the first forward pass. The candidate launcher therefore
+enables:
+
+```text
+ACTIVATION_CHECKPOINTING=on
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+If this is still too tight, the fallback is `MICRO_BATCH_SIZE=8`, which keeps the
+same effective global batch through `gradient_accumulation_steps=2`:
+
+```text
+8 * 4096 * 8 * 2 = 524,288 tokens
+```
 
 Expected schedule:
 
@@ -196,6 +213,7 @@ TRAIN_CONFIG=tsz128x4k_10B \
 DATA_SHUFFLE_SEED=3407 \
 DATA_SHUFFLE_BUFFER=100000 \
 TRAIN_NUM_WORKERS=0 \
+ACTIVATION_CHECKPOINTING=on \
 HF_UPLOAD=1 \
 HF_REPO_ID=Gated_Linear_Attention2 \
 HF_UPLOAD_INTERVAL_TOKENS=1000000000 \

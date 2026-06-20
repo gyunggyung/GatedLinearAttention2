@@ -79,6 +79,8 @@ pip install --pre --no-cache-dir torchdata --index-url https://download.pytorch.
 ./scripts/pretrain_gdn2_kla_10bt.sh
 ```
 
+H200 8장 기준 기본값은 `MICRO_BATCH_SIZE=16`, `ACTIVATION_CHECKPOINTING=on`, `TRAIN_NUM_WORKERS=0`입니다. checkpointing 없이 micro batch 16은 첫 forward에서 OOM이 났으므로 켜는 것이 기본입니다. 그래도 메모리가 부족하면 `MICRO_BATCH_SIZE=8`로 낮추면 `gradient_accumulation_steps=2`가 되어 global batch token은 그대로 유지됩니다.
+
 W&B를 켜려면:
 
 ```bash
