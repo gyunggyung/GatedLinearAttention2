@@ -602,8 +602,16 @@ def train(args, _TRAIN_START_TIME, fabric, state, train_dataloader, val_dataload
         state["trained_tokens_total"] = state["iter_num"] * tokens_per_global_micro_iter
     curr_iter = 0
     loss_func = FusedCrossEntropyLoss()    
-    if args.hf_upload and state.get("next_hf_upload_tokens", 0) <= 0:
-        state["next_hf_upload_tokens"] = args.hf_upload_interval_tokens
+    if args.hf_upload:
+        if state.get("next_hf_upload_tokens", 0) <= 0:
+            state["next_hf_upload_tokens"] = args.hf_upload_interval_tokens
+        if (
+            args.hf_upload_interval_tokens > 0
+            and state["trained_tokens_total"] >= state["next_hf_upload_tokens"]
+        ):
+            state["next_hf_upload_tokens"] = (
+                (state["trained_tokens_total"] // args.hf_upload_interval_tokens) + 1
+            ) * args.hf_upload_interval_tokens
 
     if resume:
         if args.use_stream_tok:
