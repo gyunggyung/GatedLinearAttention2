@@ -46,7 +46,7 @@ k_t(\lambda_t w_t \odot v_t)^\top
 
 긴 문맥에서는 수많은 recurrent update가 누적됩니다. update가 너무 크면 기존 memory를 과하게 지우고, 너무 작으면 중요한 새 정보를 제대로 쓰지 못합니다. 이 후보는 GDN-2의 세밀한 erase/write 선택에 update-size 정규화를 더해서 long-context memory interference를 줄이는 것을 목표로 합니다.
 
-자세한 수식과 설계 근거는 [docs/gdn2_kla_single_candidate.md](docs/gdn2_kla_single_candidate.md)에 정리했습니다. "이게 정확히 attention인지", "KV cache가 늘어나는지", "10T token stream이 어떤 의미에서 가능한지"는 [docs/what_exactly_is_gdn2_kla.md](docs/what_exactly_is_gdn2_kla.md)에 더 자세히 정리했습니다.
+자세한 수식과 설계 근거는 [docs/gdn2_kla_single_candidate.md](docs/gdn2_kla_single_candidate.md)에 정리했습니다. "이게 정확히 attention인지", "KV cache가 늘어나는지", "10T token stream이 어떤 의미에서 가능한지"는 [docs/what_exactly_is_gdn2_kla.md](docs/what_exactly_is_gdn2_kla.md)에 더 자세히 정리했습니다. 수식이 익숙하지 않은 사람도 바로 읽을 수 있는 설명은 [docs/gated_linear_attention2_beginner_explainer.md](docs/gated_linear_attention2_beginner_explainer.md)에 따로 정리했습니다.
 
 GDN-2 논문은 pretraining 기본 길이를 4K로 두고, RULER Table 3에서는 일부 synthetic retrieval task를 8K까지 평가합니다. 따라서 첫 실험은 10B tokens만 쓰되 sequence length는 4K로 맞춰야 GDN-2 100B recipe와 가장 공정하게 비교됩니다. 32K/128K/1M 확장은 후속 long-context 단계로 분리합니다.
 
