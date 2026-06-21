@@ -24,7 +24,9 @@ Run with `lm-eval-harness` through `scripts/lm_eval_gla2.py`.
 - ARC-Easy: `arc_easy`
 - ARC-Challenge: `arc_challenge`
 - OpenBookQA: `openbookqa`
-- Social IQA: `social_iqa`
+- Social IQA: `social_iqa` in the paper list, currently marked `n/a` in the
+  accelerated local run because `datasets==4.8.5` rejects the legacy
+  `allenai/social_i_qa` dataset script used by the installed lm-eval task.
 - BoolQ: `boolq`
 
 The paper reports Wiki/LAMBADA perplexity and accuracy values. Accuracy values
@@ -97,6 +99,25 @@ baselines. When all `10B` jobs finish, the markdown summary is regenerated.
 Only then does the runner start the `01B` through `09B` learning-curve jobs. In
 the learning-curve phase, any free GPU immediately takes the next pending job.
 
+The current accelerated 10B run splits the final checkpoint across all 8 GPUs:
+
+```bash
+bash scripts/run_10b_eval_accelerated.sh
+```
+
+RULER Table 3 is split across GPUs 0-3. Table 2 without Social IQA and Table 4
+retrieval are split across GPUs 4-7 with:
+
+```bash
+bash scripts/run_10b_lm_eval_retries.sh
+```
+
+The retry script uses the patched lm-eval adapter, writes split JSON files under
+`runs/eval/gdn2_paper/10B/splits/`, then merges whatever completed split files
+exist into `standard_lm_eval.json`, `real_world_lm_eval.json`, and
+`ruler_table3.json`. The markdown summary is regenerated from those merged JSON
+files, so partial results appear as soon as valid JSON exists.
+
 ## Automatic Start After Training
 
 The watcher is:
@@ -137,3 +158,7 @@ and checkpoint.
   `scripts/run_gdn2_paper_eval.py`.
 - Training-completion watcher exists:
   `scripts/watch_and_run_gdn2_eval.sh`.
+- Accelerated 10B split runner exists:
+  `scripts/run_10b_eval_accelerated.sh`.
+- Patched 10B lm-eval retry runner exists:
+  `scripts/run_10b_lm_eval_retries.sh`.

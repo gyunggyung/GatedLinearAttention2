@@ -275,7 +275,13 @@ class GatedLinearAttention2LM(LM):
                 )
             )
             total = 0.0
-            for _, context_enc, continuation_enc in windows:
+            for window in windows:
+                if len(window) == 3:
+                    _, context_enc, continuation_enc = window
+                elif len(window) == 2:
+                    context_enc, continuation_enc = window
+                else:
+                    raise ValueError(f"Unexpected rolling window shape: {len(window)}")
                 score, _ = self._score_token_ids(context_enc, continuation_enc)
                 total += score
             results.append(total)
@@ -411,7 +417,7 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
+        json.dump(results, f, indent=2, ensure_ascii=False, default=str)
 
 
 if __name__ == "__main__":

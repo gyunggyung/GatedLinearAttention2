@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,9 @@ def main() -> None:
     lines.append("# GatedLinearAttention2 GDN-2 Paper Evaluation Results")
     lines.append("")
     lines.append("This report is generated from local evaluation JSON files and compares against GDN-2 paper Tables 2, 3, and 4.")
+    lines.append(f"Generated at: {datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S KST')}.")
+    lines.append("")
+    lines.append("`n/a` means the matching JSON or metric is not available yet. Social IQA is marked `n/a` in the accelerated local run because the installed `datasets==4.8.5` blocks the legacy `allenai/social_i_qa` dataset script used by this lm-eval task.")
     lines.append("")
     lines.append("## Baseline Targets")
     lines.append("")
