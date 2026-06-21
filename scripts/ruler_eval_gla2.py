@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", default="bf16")
     parser.add_argument("--limit", type=int, default=0, help="0 means full generated dataset")
     parser.add_argument("--max_gen_toks", type=int, default=128)
+    parser.add_argument("--batch_size", type=int, default=1)
     return parser.parse_args()
 
 
@@ -55,6 +56,7 @@ def main() -> None:
         max_length=max(args.max_length, max(lengths)),
         device=args.device,
         dtype=args.dtype,
+        eval_batch_size=args.batch_size,
     )
 
     summary: dict[str, dict[str, float | int]] = {}
@@ -73,20 +75,24 @@ def main() -> None:
 
         by_length: dict[int, list[float]] = {length: [] for length in lengths}
         task_examples: list[dict[str, str]] = []
+        requests = []
+        request_rows = []
         for row in rows:
             prompt = row["input"].strip()
             gen_prefix = row.get("gen_prefix", "").strip()
             if gen_prefix:
                 prompt = f"{prompt} {gen_prefix}"
-            pred = lm.generate_until(
-                [
-                    type(
-                        "Req",
-                        (),
-                        {"args": (prompt, {"until": [], "max_gen_toks": args.max_gen_toks, "do_sample": False})},
-                    )()
-                ]
-            )[0]
+            requests.append(
+                type(
+                    "Req",
+                    (),
+                    {"args": (prompt, {"until": [], "max_gen_toks": args.max_gen_toks, "do_sample": False})},
+                )()
+            )
+            request_rows.append(row)
+
+        preds = lm.generate_until(requests)
+        for row, pred in zip(request_rows, preds):
             score = string_match_all([pred], [row["outputs"]])
             by_length[int(row["max_length"])].append(float(score))
             if len(task_examples) < 5:

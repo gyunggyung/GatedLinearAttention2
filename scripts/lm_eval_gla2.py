@@ -68,12 +68,13 @@ class GatedLinearAttention2LM(LM):
         device: str = "cuda",
         dtype: str = "bf16",
         strict: bool = True,
+        eval_batch_size: int = 1,
     ) -> None:
         super().__init__()
         self._device = torch.device(device if torch.cuda.is_available() or device == "cpu" else "cpu")
         self._dtype = parse_dtype(dtype)
         self.max_length = int(max_length)
-        self.batch_size = 1
+        self.batch_size = max(1, int(eval_batch_size))
         self.logits_cache = False
         self.backend = "causal"
         self.checkpoint = str(checkpoint)
@@ -145,6 +146,30 @@ class GatedLinearAttention2LM(LM):
         ):
             return self.model(tensor)
 
+    @torch.no_grad()
+    def _model_logits_batch(self, input_ids_batch: list[list[int]]) -> tuple[torch.Tensor, list[int]]:
+        sanitized: list[list[int]] = []
+        lengths: list[int] = []
+        for input_ids in input_ids_batch:
+            if not input_ids:
+                input_ids = [self.prefix_token_id]
+            if len(input_ids) > self.max_length:
+                input_ids = input_ids[-self.max_length :]
+            sanitized.append(input_ids)
+            lengths.append(len(input_ids))
+
+        max_len = max(lengths)
+        pad_id = int(self.tokenizer.pad_token_id or self.eot_token_id)
+        tensor = torch.full((len(sanitized), max_len), pad_id, dtype=torch.long, device=self.device)
+        for row, input_ids in enumerate(sanitized):
+            tensor[row, : len(input_ids)] = torch.tensor(input_ids, dtype=torch.long, device=self.device)
+        with torch.autocast(
+            device_type=self.device.type,
+            dtype=self._dtype,
+            enabled=self.device.type == "cuda" and self._dtype in (torch.bfloat16, torch.float16),
+        ):
+            return self.model(tensor), lengths
+
     def _score_token_ids(self, context_enc: list[int], continuation_enc: list[int]) -> tuple[float, bool]:
         if not continuation_enc:
             return 0.0, True
@@ -170,13 +195,68 @@ class GatedLinearAttention2LM(LM):
         greedy = torch.argmax(logits, dim=-1)
         return float(token_logprobs.sum().item()), bool(torch.equal(greedy, target_tensor))
 
+    def _prepare_score(self, context_enc: list[int], continuation_enc: list[int]) -> dict[str, Any]:
+        if not continuation_enc:
+            return {"empty": True}
+        if not context_enc:
+            context_enc = [self.prefix_token_id]
+        full = context_enc + continuation_enc
+        sliced = full[-(self.max_length + 1) :]
+        if len(sliced) < 2:
+            return {"empty": True}
+
+        input_ids = sliced[:-1]
+        targets = sliced[1:]
+        first_scored = max(0, len(context_enc) - (len(full) - len(sliced)) - 1)
+        scored_targets = targets[first_scored:]
+        if not scored_targets:
+            return {"empty": True}
+        return {
+            "empty": False,
+            "input_ids": input_ids,
+            "targets": targets,
+            "first_scored": first_scored,
+            "scored_targets": scored_targets,
+        }
+
+    def _score_prepared_batch(self, prepared_batch: list[dict[str, Any]]) -> list[tuple[float, bool]]:
+        active = [item for item in prepared_batch if not item["empty"]]
+        if not active:
+            return [(0.0, True) for _ in prepared_batch]
+
+        logits_batch, _ = self._model_logits_batch([item["input_ids"] for item in active])
+        active_results: list[tuple[float, bool]] = []
+        for row, item in enumerate(active):
+            targets = item["targets"]
+            first_scored = item["first_scored"]
+            scored_targets = item["scored_targets"]
+            logits = logits_batch[row, : len(item["input_ids"]), : self.tokenizer.vocab_size]
+            logits = logits[-len(targets) :, :].float()
+            logits = logits[first_scored:, :]
+            target_tensor = torch.tensor(scored_targets, dtype=torch.long, device=logits.device)
+            log_probs = F.log_softmax(logits, dim=-1)
+            token_logprobs = log_probs.gather(-1, target_tensor[:, None]).squeeze(-1)
+            greedy = torch.argmax(logits, dim=-1)
+            active_results.append((float(token_logprobs.sum().item()), bool(torch.equal(greedy, target_tensor))))
+
+        out: list[tuple[float, bool]] = []
+        active_idx = 0
+        for item in prepared_batch:
+            if item["empty"]:
+                out.append((0.0, True))
+            else:
+                out.append(active_results[active_idx])
+                active_idx += 1
+        return out
+
     def loglikelihood(self, requests) -> list[tuple[float, bool]]:
         results: list[tuple[float, bool]] = []
+        prepared: list[dict[str, Any]] = []
         for request in requests:
             context, continuation = request.args
-            context_enc = self.tok_encode(context)
-            continuation_enc = self.tok_encode(continuation)
-            results.append(self._score_token_ids(context_enc, continuation_enc))
+            prepared.append(self._prepare_score(self.tok_encode(context), self.tok_encode(continuation)))
+        for start in range(0, len(prepared), self.batch_size):
+            results.extend(self._score_prepared_batch(prepared[start : start + self.batch_size]))
         return results
 
     def loglikelihood_rolling(self, requests) -> list[float]:
@@ -203,6 +283,53 @@ class GatedLinearAttention2LM(LM):
 
     @torch.no_grad()
     def generate_until(self, requests) -> list[str]:
+        outputs: list[str] = []
+        for batch_start in range(0, len(requests), self.batch_size):
+            batch = requests[batch_start : batch_start + self.batch_size]
+            contexts: list[list[int]] = []
+            untils: list[list[str]] = []
+            max_gen_toks = 0
+            for request in batch:
+                context, gen_kwargs = request.args
+                until = gen_kwargs.get("until", []) or []
+                if isinstance(until, str):
+                    until = [until]
+                untils.append(list(until))
+                max_gen_toks = max(max_gen_toks, int(gen_kwargs.get("max_gen_toks", gen_kwargs.get("max_new_tokens", 32))))
+                contexts.append(self.tok_encode(context)[-self.max_length :])
+
+            generated: list[list[int]] = [[] for _ in batch]
+            finished = [False for _ in batch]
+            texts = ["" for _ in batch]
+            for _ in range(max_gen_toks):
+                active_indices = [idx for idx, done in enumerate(finished) if not done]
+                if not active_indices:
+                    break
+                input_batch = [(contexts[idx] + generated[idx])[-self.max_length :] for idx in active_indices]
+                logits_batch, lengths = self._model_logits_batch(input_batch)
+                for row, idx in enumerate(active_indices):
+                    logits = logits_batch[row, lengths[row] - 1, : self.tokenizer.vocab_size]
+                    next_id = int(torch.argmax(logits.float(), dim=-1).item())
+                    generated[idx].append(next_id)
+                    text = self.tok_decode(generated[idx])
+                    if untils[idx] and any(stop in text for stop in untils[idx]):
+                        for stop in untils[idx]:
+                            if stop in text:
+                                text = text.split(stop)[0]
+                                break
+                        texts[idx] = text
+                        finished[idx] = True
+                    elif next_id == self.eot_token_id:
+                        texts[idx] = text
+                        finished[idx] = True
+                    else:
+                        texts[idx] = text
+
+            outputs.extend(texts)
+        return outputs
+
+    @torch.no_grad()
+    def generate_until_slow(self, requests) -> list[str]:
         outputs: list[str] = []
         for request in requests:
             context, gen_kwargs = request.args
@@ -240,6 +367,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bf16")
     parser.add_argument("--limit", type=float, default=None)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--bootstrap_iters", type=int, default=1000)
     parser.add_argument("--ruler_lengths", default="", help="Comma-separated max sequence lengths for RULER tasks")
     parser.add_argument("--strict", action=argparse.BooleanOptionalAction, default=True)
@@ -261,12 +389,13 @@ def main() -> None:
         device=args.device,
         dtype=args.dtype,
         strict=args.strict,
+        eval_batch_size=args.batch_size,
     )
     task_manager = TaskManager(metadata=metadata)
     results = evaluator.simple_evaluate(
         model=lm,
         tasks=tasks,
-        batch_size=1,
+        batch_size=args.batch_size,
         limit=args.limit,
         bootstrap_iters=args.bootstrap_iters,
         task_manager=task_manager,
