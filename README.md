@@ -48,6 +48,8 @@ k_t(\lambda_t w_t \odot v_t)^\top
 
 자세한 수식과 설계 근거는 [docs/gdn2_kla_single_candidate.md](docs/gdn2_kla_single_candidate.md)에 정리했습니다. "이게 정확히 attention인지", "KV cache가 늘어나는지", "10T token stream이 어떤 의미에서 가능한지"는 [docs/what_exactly_is_gdn2_kla.md](docs/what_exactly_is_gdn2_kla.md)에 더 자세히 정리했습니다. 수식이 익숙하지 않은 사람도 바로 읽을 수 있는 설명은 [docs/gated_linear_attention2_beginner_explainer.md](docs/gated_linear_attention2_beginner_explainer.md)에 따로 정리했습니다.
 
+현재 10B checkpoint의 GDN2/Mamba-3 비교 결과와 RULER 대기 상태는 [docs/current_eval_comparison_gdn2_mamba3.md](docs/current_eval_comparison_gdn2_mamba3.md)에 정리했습니다. 요약하면, 최종 10B checkpoint는 완료된 GDN2 Table 2 표준 평가에서 아직 Gated DeltaNet-2를 이긴 항목이 없고, Mamba-3 recurrent 대비로는 BoolQ만 이겼으며, Mamba-3 hybrid 대비로는 아직 이긴 항목이 없습니다. RULER long-context 결과는 아직 실행 중입니다.
+
 GDN-2 논문은 pretraining 기본 길이를 4K로 두고, RULER Table 3에서는 일부 synthetic retrieval task를 8K까지 평가합니다. 따라서 첫 실험은 10B tokens만 쓰되 sequence length는 4K로 맞춰야 GDN-2 100B recipe와 가장 공정하게 비교됩니다. 32K/128K/1M 확장은 후속 long-context 단계로 분리합니다.
 
 ## 실행 전 점검

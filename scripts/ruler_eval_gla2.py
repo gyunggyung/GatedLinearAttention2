@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("NUMEXPR_MAX_THREADS", "256")
@@ -24,6 +25,40 @@ TASKS = {
     "niah_single_3": niah_utils.niah_single_3,
     "niah_multikey_1": niah_utils.niah_multikey_1,
 }
+
+
+def now_kst() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S KST", time.localtime(time.time() + 9 * 60 * 60))
+
+
+def write_output(
+    output: Path,
+    *,
+    args: argparse.Namespace,
+    lengths: list[int],
+    summary: dict[str, dict[str, float | int]],
+    examples: dict[str, list[dict[str, str]]],
+    status: str,
+    current_task: str | None = None,
+    current_length: int | None = None,
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "checkpoint": args.checkpoint,
+        "tokenizer": args.tokenizer_name,
+        "lengths": lengths,
+        "limit": args.limit,
+        "status": status,
+        "updated_at_kst": now_kst(),
+        "current_task": current_task,
+        "current_length": current_length,
+        "results": summary,
+        "examples": examples,
+    }
+    tmp = output.with_suffix(output.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    tmp.replace(output)
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +83,7 @@ def main() -> None:
     tasks = [item.strip() for item in args.tasks.split(",") if item.strip()]
     lengths = [int(item) for item in args.lengths.split(",") if item.strip()]
     common_utils.DEFAULT_SEQ_LENGTHS[:] = lengths
+    output = Path(args.output)
 
     lm = GatedLinearAttention2LM(
         checkpoint=args.checkpoint,
@@ -61,6 +97,8 @@ def main() -> None:
 
     summary: dict[str, dict[str, float | int]] = {}
     examples: dict[str, list[dict[str, str]]] = {}
+    write_output(output, args=args, lengths=lengths, summary=summary, examples=examples, status="running")
+
     for task_name in tasks:
         if task_name not in TASKS:
             raise ValueError(f"Unsupported RULER task: {task_name}")
@@ -73,59 +111,70 @@ def main() -> None:
         if args.limit and args.limit > 0:
             rows = rows[: args.limit]
 
-        by_length: dict[int, list[float]] = {length: [] for length in lengths}
-        task_examples: list[dict[str, str]] = []
-        requests = []
-        request_rows = []
+        rows_by_length: dict[int, list[dict]] = {length: [] for length in lengths}
         for row in rows:
-            prompt = row["input"].strip()
-            gen_prefix = row.get("gen_prefix", "").strip()
-            if gen_prefix:
-                prompt = f"{prompt} {gen_prefix}"
-            requests.append(
-                type(
-                    "Req",
-                    (),
-                    {"args": (prompt, {"until": [], "max_gen_toks": args.max_gen_toks, "do_sample": False})},
-                )()
-            )
-            request_rows.append(row)
-
-        preds = lm.generate_until(requests)
-        for row, pred in zip(request_rows, preds):
-            score = string_match_all([pred], [row["outputs"]])
-            by_length[int(row["max_length"])].append(float(score))
-            if len(task_examples) < 5:
-                task_examples.append(
-                    {
-                        "length": str(row["max_length"]),
-                        "prediction": pred[:300],
-                        "answers": ", ".join(row["outputs"]),
-                    }
-                )
+            rows_by_length.setdefault(int(row["max_length"]), []).append(row)
 
         summary[task_name] = {}
-        for length, scores in by_length.items():
+        task_examples: list[dict[str, str]] = []
+        examples[task_name] = task_examples
+        write_output(
+            output,
+            args=args,
+            lengths=lengths,
+            summary=summary,
+            examples=examples,
+            status="running",
+            current_task=task_name,
+        )
+
+        for length in lengths:
+            length_rows = rows_by_length.get(length, [])
+            requests = []
+            request_rows = []
+            for row in length_rows:
+                prompt = row["input"].strip()
+                gen_prefix = row.get("gen_prefix", "").strip()
+                if gen_prefix:
+                    prompt = f"{prompt} {gen_prefix}"
+                requests.append(
+                    type(
+                        "Req",
+                        (),
+                        {"args": (prompt, {"until": [], "max_gen_toks": args.max_gen_toks, "do_sample": False})},
+                    )()
+                )
+                request_rows.append(row)
+
+            preds = lm.generate_until(requests)
+            scores: list[float] = []
+            for row, pred in zip(request_rows, preds):
+                score = string_match_all([pred], [row["outputs"]])
+                scores.append(float(score))
+                if len(task_examples) < 5:
+                    task_examples.append(
+                        {
+                            "length": str(row["max_length"]),
+                            "prediction": pred[:300],
+                            "answers": ", ".join(row["outputs"]),
+                        }
+                    )
+
             summary[task_name][str(length)] = sum(scores) / len(scores) if scores else -1.0
             summary[task_name][f"{length}_n"] = len(scores)
-        examples[task_name] = task_examples
+            examples[task_name] = task_examples
+            write_output(
+                output,
+                args=args,
+                lengths=lengths,
+                summary=summary,
+                examples=examples,
+                status="running",
+                current_task=task_name,
+                current_length=length,
+            )
 
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "checkpoint": args.checkpoint,
-                "tokenizer": args.tokenizer_name,
-                "lengths": lengths,
-                "limit": args.limit,
-                "results": summary,
-                "examples": examples,
-            },
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
+    write_output(output, args=args, lengths=lengths, summary=summary, examples=examples, status="complete")
 
 
 if __name__ == "__main__":
