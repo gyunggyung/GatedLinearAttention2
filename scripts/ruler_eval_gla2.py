@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 import sys
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 os.environ.setdefault("NUMEXPR_MAX_THREADS", "256")
@@ -28,7 +28,7 @@ TASKS = {
 
 
 def now_kst() -> str:
-    return time.strftime("%Y-%m-%d %H:%M:%S KST", time.localtime(time.time() + 9 * 60 * 60))
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
 def write_output(
